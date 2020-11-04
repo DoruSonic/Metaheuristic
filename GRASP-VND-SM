@@ -1,0 +1,330 @@
+#A constructive and improvement heuristic
+
+rm(list=ls())
+load(file="X65.RData")
+
+##########################
+#  Parameter definition  #
+##########################
+
+  #Loop repeat parameters
+  NRepeats <- 10 #Number of repetitions
+  Results <- matrix(0,nrow=NRepeats,ncol=4) #1: tempo CH+RS; 2: Custo; 3: tempo IH; 4: Custo
+  Cost <- list()
+  OPtimalSets <- matrix(0,nrow=nrow(X),ncol=NRepeats)
+
+  #Constructive Heuristic parameters
+  priority <- 5
+  restriction <- 30
+
+  #Improvement Heuristic parameters
+  search_Magnitude <- 0.1
+  imp_iteration <- 50
+  ç <- 2
+  penalty <- 2
+
+  
+  #Penalize Worst columns array for X
+  X[,6] <- 0
+  colnames(X)[6] <- "u"
+  X[,7] <- 0
+  colnames(X)[7] <- "I"
+  for (i in 1:nrow(X)){
+    X[i,7] <- length(which(AttComb[,i]==1))
+  }
+  Weight <- X[,3]
+
+
+
+##########################
+#      Loop Start        #
+##########################
+for (lll in 1:NRepeats){
+  
+  #Reset to original state
+  Cost[[lll]] <- matrix(0,nrow=400,ncol=2)
+  X[,c(2,6)] <- 0
+  X[,3] <- Weight
+  I[,2:3] <- 0
+
+
+  
+
+##########################
+# Constructive Heuristic #
+##########################
+
+  #Create vectors to store info
+  AST <- 0 #Attributes Selected total
+  NSA <- c(1:nrow(I)) #Non Selected attributes
+  SST <- 0 #Sets Selected total
+  NSS <- c(1:nrow(X)) #Not Selected sets
+  
+  
+  SysTime <- Sys.time()
+  while( sum(I[,2])!=nrow(I) ){ #While not all attributes selected, continue
+    
+    #No. uncovered rows for set
+    for (i in NSS){
+      X[i,4] <- sum(AttComb[NSA,i])
+    }
+    
+    #Calculate the priority rule for each relevant set
+    RC <- sample(1:4,1) #Random cost (which one?)
+    X[SST,5] <- Inf
+    
+    #Possible priority rules
+    if (RC==1){
+      X[NSS,5] <- X[NSS,3]  /  X[NSS,4] #c/k
+    } else if (RC==2){
+      X[NSS,5] <- X[NSS,3]  /  (X[NSS,4]^2) #c/k^2
+    } else if (RC==3){
+      X[NSS,5] <- (X[NSS,3])^(1/2)  /  X[NSS,4] #c^1/2k
+    } else {
+      X[NSS,5] <- X[NSS,3]  /  (X[NSS,4]^(1/2)) #c/k^1/2
+    }
+    
+    W <- X[NSS,][which.min(X[NSS,5]),1] #Select set with lower cost
+    
+    
+    if ( sample(1:100,1)>priority ){ #95% of the times will choose from CL and not the lowest cost
+      CL <- X[ which(X[,5] <= X[W,5]*(1+restriction/100)  ) ,1] #Candidate List
+      W <- CL[sample(length(CL),1)]
+      
+    }
+    
+    #Add selected set and cover its attributes
+    #Select set
+    X[W,2] = 1
+    SST <- c(SST,W)
+    NSS <- NSS[NSS!=W]
+    
+    #Select attributes
+    AS <- which(AttComb[,W]==1) #Attributes satisfied by set W
+    AST <- unique(c(AST,AS))
+    NSA <- NSA[!NSA %in% AS]
+    I[AS,2] = 1
+    I[AS,3] = I[AS,3]+1
+    
+  }
+  
+
+
+#########################
+# Remove redundant sets #
+#########################
+
+  RS <- c(0) #Redundant Sets
+  
+  while (length(RS)!=0){ #While there are redundant sets, continue
+    
+    #Necessary sets
+    NS <- 0
+    for (i in 1:nrow(I)) {
+      if (I[i,3]==1){
+        SS <- which(AttComb[i,]==1) #Sets that satisfy attribute i
+        NS <- c(NS,  SS[SS %in% SST]  )
+      }
+    }
+    NS <- unique(NS)
+    
+    #Redundant set
+    RS <- SST[!SST %in% NS]
+    RSMax <- X[RS,][which.max(X[RS,3]),1] #RS with the highest absolute cost
+    
+    
+    X[RSMax,2] <- 0 #Deselect set
+    SST <- SST[SST!=RSMax] #Remove set
+    AR <- which(AttComb[,RSMax]==1) #Attributes affected by the removal of set RSMax
+    I[AR,3] <- I[AR,3]-1 #Remove the "attribute selection" by the removed set
+    RS <- RS[RS!=RSMax] #Remove RS from the RS vector
+    
+  }
+  
+  
+  Results[lll,1] <- round(difftime(Sys.time(),SysTime,units="secs")[[1]],digits=4)
+  Results[lll,2] <- sum(X[,2]*X[,3])
+
+  
+
+#########################
+# Improvement Heuristic #
+#########################
+
+  SysTime <- Sys.time()
+  
+  #Make copy of X and I to define the best neighbor
+  X2 <- X
+  I2 <- I
+  
+  k=1
+  
+  while (k < 6){ #search_magnitude 0.1, 0.15, ... 0.3
+    
+    search_Magnitude = 0.05*(k+1)
+  
+    for (i in 1:imp_iteration){
+      
+      #Make copy of X and I to compute the parcial problem
+      X1 <- X
+      I1 <- I
+      I1[,2:3] <- 0
+      
+      #Sets removal related
+      R <- round(sum(X1[,2])*search_Magnitude) #Compute the number of sets to be removed
+      SR <- sample(X1[X1[,2]==1,1],R) #Sets to be removed
+      X1[SR,2] <- 0 #Deselect those sets
+      SST <- X1[X1[,2]==1,1] #Sets Selected total
+      NSS <- X1[X1[,2]==0,1] #Not Selected sets
+      
+      #Attribute adjustment related
+      for (j in SST){  #Recompute which attributes are covered and how many times
+        AS <- which(AttComb[,j]==1) #Attributes satisfied by set j
+        I1[AS,2] <- 1
+        I1[AS,3] <- I1[AS,3]+1
+      }
+      AST <- I1[I1[,2]==1,1] #Attributes Selected total
+      NSA <- I1[I1[,2]==0,1] #Non Selected attributes
+      
+      
+      
+      ###############################
+      # Compute the partial problem #
+      ###############################
+  
+      while( sum(I1[,2])!=nrow(I) ){ #While not all attributes selected, continue
+        
+        #No. uncovered rows for set
+        for (l in NSS){
+          X1[l,4] <- sum(AttComb[NSA,l])
+        }
+        
+        #Calculate the priority rule for each relevant set
+        RC <- sample(1:4,1) #Random cost (which one?)
+        X1[,5] <- Inf #Guarantee that only the sets in NSS can be selected
+        
+        #Possible priority rules
+        if (RC==1){
+          X1[NSS,5] <- X1[NSS,3]  /  X1[NSS,4] #c/k
+        } else if (RC==2){
+          X1[NSS,5] <- X1[NSS,3]  /  (X1[NSS,4]^2) #c/k^2
+        } else if (RC==3){
+          X1[NSS,5] <- (X1[NSS,3])^(1/2)  /  X1[NSS,4] #c^1/2k
+        } else {
+          X1[NSS,5] <- X1[NSS,3]  /  (X1[NSS,4]^(1/2)) #c/k^1/2
+        }
+        
+        W <- X1[NSS,][which.min(X1[NSS,5]),1] #Select set with lower cost
+        
+        
+        if ( sample(1:100,1)>priority ){ #95% of the times will choose from CL and not the lowest cost
+          CL <- X1[ which(X1[,5] <= X1[W,5]*(1+restriction/100)  ) ,1] #Candidate List
+          W <- CL[sample(length(CL),1)]
+          
+        }
+        
+        #Add selected set and cover its attributes
+        #Select set
+        X1[W,2] = 1
+        SST <- c(SST,W)
+        NSS <- NSS[NSS!=W]
+        
+        AS <- which(AttComb[,W]==1) #Attributes satisfied by set W
+        AST <- unique(c(AST,AS))
+        NSA <- NSA[!NSA %in% AS]
+        I1[AS,2] = 1
+        I1[AS,3] = I1[AS,3]+1
+        
+      }
+      
+      
+      
+      
+      #########################
+      # Remove redundant sets #
+      #########################
+      RS <- c(0) #Redundant Sets
+      
+      while (length(RS)!=0){ #While there are redundant sets, continue
+        
+        #Necessary sets
+        NS <- 0
+        for (o in 1:nrow(I)) {
+          if (I1[o,3]==1){
+            SS <- which(AttComb[o,]==1) #Sets that satisfy attribute o
+            NS <- c(NS,  SS[SS %in% SST]  )
+          }
+        }
+        NS <- unique(NS)
+        
+        #Redundant set
+        RS <- SST[!SST %in% NS]
+        RSMax <- X1[RS,][which.max(X1[RS,3]),1] #RS with the highest absolute cost
+        
+        
+        X1[RSMax,2] <- 0 #Deselect set
+        SST <- SST[SST!=RSMax] #Remove set
+        AR <- which(AttComb[,RSMax]==1) #Attributes affected by the removal of set RSMax
+        I1[AR,3] <- I1[AR,3]-1 #Remove the "attribute selection" by the removed set
+        RS <- RS[RS!=RSMax] #Remove RS from the RS vector
+        
+      }
+      
+      
+      
+      if (  sum(X1[,2]*Weight) < sum(X2[,2]*Weight)  ) {
+        X2 <- X1
+        I2 <- I1
+      }
+      
+      #Penalize the worst columns
+      X1[,8] <- X1[,3]/X1[,6]*X1[,7]
+      PenCost <- max(X1[X1[,2]==1,8]) * (1-penalty/100)   #Penalized Cost
+      PL <- X1[X1[,2]==1,][which( X1[X1[,2]==1,8] >= PenCost ),1]
+      X[PL,6] <- X[PL,6]+1  #Penalized List
+      X[PL,3] <- X[PL,3] + ( ç * X[PL,3] * (1-exp(-X[PL,6]))  ) #Penalize worst columns (which are all at the first iteration)
+      
+      print(paste("Loop no.",lll,"| k =",k,"| iteration no.",i))
+    }
+    
+    if (  sum(X2[,2]*Weight) < sum(X[,2]*Weight)  ) {
+      X <- X2
+      I <- I2
+      k=0
+    }
+    
+    #Depenalize columns
+    X[PL,6] <- 0
+    
+    k=k+1
+    
+    
+    Cost[[lll]][i,] <- c( sum(X[,2]*Weight) , sum(X2[,2]*Weight) )
+    
+  }
+  
+
+  Results[lll,3] <- round(difftime(Sys.time(),SysTime,units="secs")[[1]],digits=4)
+  Results[lll,4] <- sum(X[,2]*Weight)
+  OPtimalSets[,lll] <- X[,2]
+  
+
+}
+
+Metrics <- matrix(0,nrow=5,ncol=3)
+Metrics[1,] <- c( min(Results[,1]) , mean(Results[,1]) , max(Results[,1]) ) #Computational speed in CH
+Metrics[2,] <- c( min(Results[,2]) , mean(Results[,2]) , max(Results[,2]) ) #Cost in CH
+Metrics[3,] <- c( min(Results[,3]) , mean(Results[,3]) , max(Results[,3]) ) #Computational speed in IH
+Metrics[4,] <- c( min(Results[,4]) , mean(Results[,4]) , max(Results[,4]) ) #Cost in IH
+lengths <- 0
+for (l in 1:10){
+  lengths[l] <- length(Cost[[l]])
+}
+Metrics[5,] <- c( min(lengths) , mean(lengths) , max(lengths) )
+
+
+rm(list=setdiff(ls(), c("Cost","Metrics","OPtimalSets","Results") ))
+
+save.image(file="X65VND.RData")
+write.csv(Metrics,"X65VNDMetrics.csv")
+write.csv(Results,"X65VNDResults.csv")
